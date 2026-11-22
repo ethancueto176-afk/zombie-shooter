@@ -362,7 +362,19 @@ function addOwner(){
 function renderBans(){
  if(!isOwner)return;
  const el=document.getElementById('banlist');
- db.ref('owners').once('value').then(os=>{const oc=os.val()?Object.keys(os.val()).length:0;el.textContent='owners: '+oc;});
+ if(!el.dataset.boot){el.dataset.boot=1;el.innerHTML='<div id="ownl"></div><div id="banl"></div>';}
+ const ownl=document.getElementById('ownl'),banl=document.getElementById('banl');
+ db.ref('owners').off('value');
+ db.ref('owners').on('value',snap=>{
+  const v=snap.val()||{};const ks=Object.keys(v);
+  let h='OWNERS ('+ks.length+'):'+(ks.length?'':' none');
+  for(const k of ks)h+='<br>pin '+k.slice(1,5)+' <button data-unown="'+k+'">REMOVE</button>';
+  ownl.innerHTML=h;
+  ownl.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
+   db.ref('owners/'+b.dataset.unown).remove();
+   document.getElementById('pinmsg').textContent='owner removed';
+  }));
+ });
  db.ref('banned').off('value');
  db.ref('banned').on('value',snap=>{
   const v=snap.val()||{};let html='<br>BANNED IDS:';
@@ -371,8 +383,8 @@ function renderBans(){
   else for(const k of ks)html+='<br>#'+k.slice(1,7).toUpperCase()+' <button data-un="'+k+'">UNBAN</button>';
   if(net.isHost&&net.guestUid)html+='<br>PLAYER HERE: '+('#'+net.guestUid.slice(1,7).toUpperCase())+' <button data-ban="'+net.guestUid+'">BAN</button>';
   if(!net.isHost&&net.hostUid)html+='<br>PLAYER HERE: '+('#'+net.hostUid.slice(1,7).toUpperCase())+' <button data-ban="'+net.hostUid+'">BAN</button>';
-  el.innerHTML=html;
-  el.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
+  banl.innerHTML=html;
+  banl.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
    if(b.dataset.ban){db.ref('banned/'+b.dataset.ban).set(1);document.getElementById('pinmsg').textContent='banned '+(('#'+b.dataset.ban.slice(1,7).toUpperCase()));}
    else if(b.dataset.un){db.ref('banned/'+b.dataset.un).remove();document.getElementById('pinmsg').textContent='unbanned '+(('#'+b.dataset.un.slice(1,7).toUpperCase()));}
   }));
