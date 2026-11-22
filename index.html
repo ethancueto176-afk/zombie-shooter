@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ZOMBIE OUTBREAK: BOSS PROTOCOL</title>
 <style>
-  html,body{margin:0;padding:0;background:#0a0a0f;overflow:hidden;font-family:'Courier New',monospace;color:#c8ffc8;}
+  html,body{margin:0;padding:0;width:100%;height:100%;background:#0a0a0f;overflow:hidden;font-family:'Courier New',monospace;color:#c8ffc8;}
   #wrap{position:fixed;inset:0;}
   canvas{display:block;width:100%;height:100%;cursor:crosshair;}
   #hud{position:fixed;top:10px;left:10px;z-index:5;pointer-events:none;text-shadow:0 0 6px #000;}
@@ -75,6 +75,19 @@ cv.addEventListener('mousemove',e=>{mouse.x=e.clientX;mouse.y=e.clientY;});
 cv.addEventListener('mousedown',e=>{mouse.down=true;if(AC&&AC.state==='suspended')AC.resume();});
 addEventListener('mouseup',()=>{mouse.down=false;});
 cv.addEventListener('contextmenu',e=>e.preventDefault());
+// ---------- touch controls (phones) ----------
+let touch={active:false,x:0,y:0};
+cv.addEventListener('touchstart',e=>{e.preventDefault();const t=e.touches[0];touch.active=true;touch.x=t.clientX;touch.y=t.clientY;if(AC&&AC.state==='suspended')AC.resume();},{passive:false});
+cv.addEventListener('touchmove',e=>{e.preventDefault();const t=e.touches[0];touch.x=t.clientX;touch.y=t.clientY;},{passive:false});
+cv.addEventListener('touchend',e=>{e.preventDefault();touch.active=false;},{passive:false});
+function autoAim(){
+ let best=null,bd=1e9;
+ if(boss){const d=Math.hypot(boss.x-player.x,boss.y-player.y);if(d<bd){bd=d;best=boss;}}
+ for(const z of zombies){const d=Math.hypot(z.x-player.x,z.y-player.y);if(d<bd){bd=d;best=z;}}
+ if(best)player.ang=Math.atan2(best.y-player.y,best.x-player.x);
+ else player.ang=Math.atan2(touch.y-player.y,touch.x-player.x);
+}
+if('ontouchstart' in window){const k=document.querySelector('.keys');if(k)k.textContent='touch and drag anywhere to move, it aims and fires for you. tap START GAME below';}
 
 // ---------- weapons ----------
 function reload(){if(reloading<=0&&mag<MAG){reloading=60;}}
@@ -140,10 +153,11 @@ function update(){
  if(keys['w']||keys['arrowup'])dy--;if(keys['s']||keys['arrowdown'])dy++;
  if(keys['a']||keys['arrowleft'])dx--;if(keys['d']||keys['arrowright'])dx++;
  if(dx||dy){const l=Math.hypot(dx,dy);player.x+=dx/l*player.speed;player.y+=dy/l*player.speed;}
+ if(touch.active){const tx=touch.x-player.x,ty=touch.y-player.y,td=Math.hypot(tx,ty);if(td>10){player.x+=tx/td*player.speed;player.y+=ty/td*player.speed;}}
  player.x=Math.max(player.r,Math.min(W-player.r,player.x));player.y=Math.max(player.r,Math.min(H-player.r,player.y));
  player.ang=Math.atan2(mouse.y-player.y,mouse.x-player.x);
  if(player.iframes>0)player.iframes--;if(player.rapid>0)player.rapid--;if(player.shotgun>0)player.shotgun--;
- if(mouse.down&&fireCd<=0)shoot();if(fireCd>0)fireCd--;
+ if(touch.active){autoAim();if(fireCd<=0)shoot();}else if(mouse.down&&fireCd<=0)shoot();if(fireCd>0)fireCd--;
  if(reloading>0){reloading--;if(reloading<=0)mag=MAG;}
  // waves
  if(!boss&&zombies.length===0&&spawnQueue.length===0){waveTimer++;if(waveTimer>140)nextWave();}
