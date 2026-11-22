@@ -263,8 +263,9 @@ function update(){
   if(rem.p2){if(rem.p2.rapid)player.rapid=1;if(rem.p2.shotgun)player.shotgun=1;}
   if(gameTime%4===0)send({t:'p',x:Math.round(player.x),y:Math.round(player.y),ang:player.ang});
  }else{
-  player.ang=Math.atan2(mouse.y-player.y,mouse.x-player.x);
-  if(mouse.down&&fireCd<=0)shoot();if(fireCd>0)fireCd--;
+  if(touch.active){autoAim();if(fireCd<=0)shoot();}
+  else{player.ang=Math.atan2(mouse.y-player.y,mouse.x-player.x);if(mouse.down&&fireCd<=0)shoot();}
+  if(fireCd>0)fireCd--;
   if(reloading>0){reloading--;if(reloading<=0)mag=MAG;}
   hostSim();
   if(net.isHost&&net.open&&gameTime%4===0)sendSnap();
@@ -371,7 +372,7 @@ function drawNet(){
  for(const p of rem.pk||[]){const c=p[2]===0?'#f55':p[2]===1?'#ff5':'#5af';ctx.fillStyle=c;ctx.beginPath();ctx.arc(p[0],p[1],10,0,7);ctx.fill();}
  for(const p of parts){ctx.globalAlpha=Math.max(0,p.life/40);ctx.fillStyle=p.color;ctx.fillRect(p.x-2,p.y-2,4,4);}ctx.globalAlpha=1;
  for(const z of rem.zs||[]){ctx.fillStyle=z[3]?'#fff':ZC[z[4]||0];ctx.beginPath();ctx.arc(z[0],z[1],z[2],0,7);ctx.fill();
-  ctx.fillStyle='#111';ctx.beginPath();ctx.arc(z[0]-4,z[1]-4,2.5,0,7);ctx.arc(z[0]+4,z[1]-4,2.5,0,7);ctx.fill();}
+  ctx.fillStyle='#111';ctx.beginPath();ctx.arc(z[0]-4,z[1]-4,2.5,0,7);ctx.arc(z[0]+4,z.y-4,2.5,0,7);ctx.fill();}
  if(rem.bo){ctx.fillStyle='#b33';ctx.beginPath();ctx.arc(rem.bo[0],rem.bo[1],rem.bo[2],0,7);ctx.fill();
   ctx.strokeStyle='#f66';ctx.lineWidth=3;ctx.beginPath();ctx.arc(rem.bo[0],rem.bo[1],rem.bo[2]+8,0,7);ctx.stroke();
   document.getElementById('bossname').textContent=rem.bo[4];document.getElementById('bossbar').style.display='block';document.getElementById('bossfill').style.width=Math.max(0,rem.bo[3]*100)+'%';}
