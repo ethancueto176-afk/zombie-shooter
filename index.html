@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ZOMBIE OUTBREAK: BOSS PROTOCOL</title>
+<title>ZOMBIE OUTBREAK: CO-OP</title>
 <style>
   html,body{margin:0;padding:0;width:100%;height:100%;background:#0a0a0f;overflow:hidden;font-family:'Courier New',monospace;color:#c8ffc8;}
   #wrap{position:fixed;inset:0;}
@@ -15,12 +15,17 @@
   #bossbar{position:fixed;top:10px;left:50%;transform:translateX(-50%);width:420px;z-index:5;display:none;pointer-events:none;text-align:center;}
   #bossbar .name{color:#f66;font-size:20px;letter-spacing:3px;text-shadow:0 0 8px #000;}
   #bossfill{height:12px;width:100%;background:linear-gradient(90deg,#f33,#fa0);transition:width .2s;}
-  #overlay{position:fixed;inset:0;z-index:10;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(5,5,10,.88);text-align:center;}
+  #overlay{position:fixed;inset:0;z-index:10;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(5,5,10,.9);text-align:center;}
   #overlay h1{color:#5f5;font-size:44px;letter-spacing:6px;margin:0 0 10px;text-shadow:0 0 18px #3f3;}
   #overlay p{max-width:560px;line-height:1.5;font-size:16px;color:#cfc;}
   #overlay button{margin-top:22px;padding:14px 34px;font-size:20px;font-family:inherit;background:#0f0;color:#050;border:none;border-radius:4px;cursor:pointer;letter-spacing:2px;}
   #overlay button:hover{background:#3f3;}
   .keys{margin-top:14px;color:#8c8;font-size:14px;}
+  #mp{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:16px;max-width:560px;}
+  #mp button{margin-top:0;padding:10px 18px;font-size:16px;}
+  #joinrow{display:none;gap:8px;justify-content:center;width:100%;align-items:center;}
+  #codein{width:120px;padding:10px;font-size:18px;font-family:inherit;text-align:center;text-transform:uppercase;background:#020;color:#5f5;border:2px solid #4f4;border-radius:4px;letter-spacing:4px;}
+  #netstatus{width:100%;color:#ff5;font-size:14px;min-height:18px;}
   #banner{position:fixed;top:35%;left:0;right:0;z-index:6;text-align:center;font-size:46px;color:#f55;letter-spacing:8px;pointer-events:none;opacity:0;text-shadow:0 0 20px #900;}
   #banner.show{animation:banner 2.2s ease forwards;}
   @keyframes banner{0%{opacity:0;transform:scale(.6)}20%{opacity:1;transform:scale(1.05)}80%{opacity:1}100%{opacity:0;transform:scale(1.1)}}
@@ -37,10 +42,17 @@
 <div id="banner"></div>
 <div id="overlay">
   <h1>ZOMBIE OUTBREAK</h1>
-  <p id="story">The city is gone. The dead walk in waves, and every fifth wave a BOSS hunts you. Survive as long as you can.</p>
+  <p id="story">The city is gone. The dead walk in waves, and every fifth wave a BOSS hunts you. Survive as long as you can. Or play co-op: one of you hosts, the other joins with the room code.</p>
   <p class="keys">WASD / arrows to move &middot; mouse to aim &middot; hold click to shoot &middot; R to reload &middot; P to pause</p>
-  <button id="startbtn">START GAME</button>
+  <button id="startbtn">SOLO GAME</button>
+  <div id="mp">
+    <button id="hostbtn">HOST CO-OP</button>
+    <button id="joinbtn">JOIN CO-OP</button>
+    <div id="joinrow"><input id="codein" maxlength="4" placeholder="CODE" autocomplete="off"><button id="joingo">GO</button></div>
+    <div id="netstatus"></div>
+  </div>
 </div>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 "use strict";
 const cv=document.getElementById('game'),ctx=cv.getContext('2d');
@@ -60,11 +72,13 @@ const keys={};let mouse={x:W/2,y:H/2,down:false},paused=false,playing=false;
 let player,wave,score,zombies,bullets,parts,pickups,projectiles,spawnQueue,waveTimer,shake,boss,gameTime,fireCd;
 const BOSS_EVERY=5;
 const MAG=12;let mag=MAG,reloading=0;
+let p2=null,remote={x:0,y:0,ang:0},rem={};
 
 function reset(){
  player={x:W/2,y:H/2,r:14,hp:100,maxhp:100,speed:4.2,ang:0,iframes:0,rapid:0,shotgun:0};
  wave=0;score=0;zombies=[];bullets=[];parts=[];pickups=[];projectiles=[];spawnQueue=[];waveTimer=90;shake=0;boss=null;gameTime=0;fireCd=0;
  mag=MAG;reloading=0;
+ if(!net.isHost)p2=null;
  document.getElementById('bossbar').style.display='none';updHud();
 }
 
@@ -87,7 +101,14 @@ function autoAim(){
  if(best)player.ang=Math.atan2(best.y-player.y,best.x-player.x);
  else player.ang=Math.atan2(touch.y-player.y,touch.x-player.x);
 }
-if('ontouchstart' in window){const k=document.querySelector('.keys');if(k)k.textContent='touch and drag anywhere to move, it aims and fires for you. tap START GAME below';}
+function aimNearestNet(){
+ let best=null,bd=1e9;
+ for(const z of (rem.zs||[])){const d=Math.hypot(z[0]-player.x,z[1]-player.y);if(d<bd){bd=d;best=z;}}
+ if(rem.bo){const d=Math.hypot(rem.bo[0]-player.x,rem.bo[1]-player.y);if(d<bd){bd=d;best=rem.bo;}}
+ if(best)player.ang=Math.atan2(best[1]-player.y,best[0]-player.x);
+ else player.ang=Math.atan2(touch.y-player.y,touch.x-player.x);
+}
+if('ontouchstart' in window){const k=document.querySelector('.keys');if(k)k.textContent='touch and drag anywhere to move, it aims and fires for you. tap a button below to play';}
 
 // ---------- weapons ----------
 function reload(){if(reloading<=0&&mag<MAG){reloading=60;}}
@@ -107,10 +128,9 @@ function shoot(){
 function spawnZombie(type){
  const side=Math.floor(Math.random()*4);let x,y;
  if(side===0){x=Math.random()*W;y=-40;}else if(side===1){x=Math.random()*W;y=H+40;}else if(side===2){x=-40;y=Math.random()*H;}else{x=W+40;y=Math.random()*H;}
- const base={x,y,type,hit:0};
- if(type==='runner'){zombies.push({...base,r:11,hp:26,sp:3.1,dmg:8,color:'#8f8',score:15});}
- else if(type==='tank'){zombies.push({...base,r:22,hp:130,sp:1.1,dmg:22,color:'#4a4',score:40});}
- else{zombies.push({...base,r:14,hp:48,sp:1.7,dmg:12,color:'#5a5',score:10});}
+ if(type==='runner'){zombies.push({x,y,type,hit:0,r:11,hp:26,sp:3.1,dmg:8,color:'#8f8',ci:1,score:15});}
+ else if(type==='tank'){zombies.push({x,y,type,hit:0,r:22,hp:130,sp:1.1,dmg:22,color:'#4a4',ci:2,score:40});}
+ else{zombies.push({x,y,type,hit:0,r:14,hp:48,sp:1.7,dmg:12,color:'#5a5',ci:0,score:10});}
 }
 
 function spawnBoss(){
@@ -121,7 +141,7 @@ function spawnBoss(){
  banner('BOSS INCOMING');sfx('boss');
 }
 
-function banner(txt){const b=document.getElementById('banner');b.textContent=txt;b.classList.remove('show');void b.offsetWidth;b.classList.add('show');}
+function banner(txt){const b=document.getElementById('banner');b.textContent=txt;b.classList.remove('show');void b.offsetWidth;b.classList.add('show');if(net.isHost&&net.open)send({t:'msg',x:txt});}
 
 // ---------- particles ----------
 function boom(x,y,color,n,spd){for(let i=0;i<n;i++){const a=Math.random()*Math.PI*2,s=Math.random()*spd;parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:20+Math.random()*20,color});}}
@@ -139,27 +159,123 @@ function nextWave(){
  waveTimer=0;
 }
 
-// ---------- update ----------
-function updHud(){document.getElementById('wave').textContent=wave;document.getElementById('score').textContent=score;
- const f=document.getElementById('hpfill');f.style.width=Math.max(0,player.hp/player.maxhp*100)+'%';
+// ---------- multiplayer ----------
+const PPFX='zoboshooter77-';
+let net={peer:null,conn:null,open:false,isHost:false,code:''};
+
+function nstatus(t){const e=document.getElementById('netstatus');if(e)e.textContent=t;}
+function makeCode(){const l='ABCDEFGHJKMNPQRSTUVWXYZ23456789';let c='';for(let i=0;i<4;i++)c+=l[Math.floor(Math.random()*l.length)];return c;}
+function send(o){if(net.conn&&net.conn.open){try{net.conn.send(o);}catch(e){}}}
+
+function hostGame(){
+ if(typeof Peer==='undefined'){nstatus('multiplayer needs internet, reload the page');return;}
+ net.isHost=true;net.code=makeCode();nstatus('making room '+net.code+'...');
+ net.peer=new Peer(PPFX+net.code.toLowerCase());
+ net.peer.on('open',()=>nstatus('room code: '+net.code+'. tell your friend to join with it, then hit SOLO GAME to start'));
+ net.peer.on('connection',c=>{if(net.conn&&net.conn.open){c.close();return;}net.conn=c;bindConn(c);});
+ net.peer.on('error',e=>nstatus('room error: '+e.type));
+}
+
+function joinGame(code){
+ if(typeof Peer==='undefined'){nstatus('multiplayer needs internet, reload the page');return;}
+ code=(code||'').trim().toUpperCase();
+ if(code.length<4){nstatus('type the 4-letter room code first');return;}
+ net.isHost=false;nstatus('joining '+code+'...');
+ net.peer=new Peer();
+ net.peer.on('open',()=>{const c=net.peer.connect(PPFX+code.toLowerCase());net.conn=c;bindConn(c);});
+ net.peer.on('error',e=>nstatus('could not join: '+e.type));
+}
+
+function bindConn(c){
+ c.on('open',()=>{
+  net.open=true;
+  if(net.isHost){addP2();nstatus('friend joined!');if(playing)send({t:'start'});}
+  else{nstatus('connected! waiting for the host to start...');}
+ });
+ c.on('data',d=>onNet(d));
+ c.on('close',()=>{
+  net.open=false;
+  if(net.isHost){p2=null;nstatus('friend left');}
+  else{nstatus('disconnected from host');if(playing){playing=false;showOverlay('CONNECTION LOST','The host left the game.','PLAY SOLO');}}
+ });
+}
+
+function addP2(){p2={x:player.x+40,y:player.y,r:14,hp:100,maxhp:100,iframes:60,rapid:0,shotgun:0,ang:0};}
+
+function onNet(d){
+ if(!d||typeof d!=='object')return;
+ if(net.isHost){
+  if(d.t==='p'&&p2){p2.x=d.x;p2.y=d.y;p2.ang=d.ang;}
+  else if(d.t==='sh'&&p2){const px=p2.x+Math.cos(d.a)*18,py=p2.y+Math.sin(d.a)*18;const shots=p2.shotgun>0?5:1;for(let i=0;i<shots;i++){const sp=p2.shotgun>0?(i-2)*.12:0;bullets.push({x:px,y:py,vx:Math.cos(d.a+sp)*SPD,vy:Math.sin(d.a+sp)*SPD,r:4,life:60,dmg:p2.shotgun>0?16:34});}sfx('shoot');}
+ }else{
+  if(d.t==='start'){reset();document.getElementById('overlay').style.display='none';playing=true;banner('CO-OP START');}
+  else if(d.t==='s'){rem=d;}
+  else if(d.t==='msg'){banner(d.x);}
+  else if(d.t==='go'){net.conn.close();net.open=false;playing=false;showOverlay('YOU DIED','You survived '+d.w+' waves with a score of '+d.sc+'. The horde always comes back.','PLAY SOLO');}
+ }
+}
+
+function sendSnap(){
+ const zs=[];for(const z of zombies)zs.push([Math.round(z.x),Math.round(z.y),z.r,z.hit>0?1:0,z.ci]);
+ const bs=[];for(const b of bullets)bs.push([Math.round(b.x),Math.round(b.y)]);
+ const pr=[];for(const p of projectiles)pr.push([Math.round(p.x),Math.round(p.y)]);
+ const pk=[];for(const p of pickups)pk.push([Math.round(p.x),Math.round(p.y),p.kind==='hp'?0:p.kind==='rapid'?1:2]);
+ send({t:'s',w:wave,sc:score,me:{x:Math.round(player.x),y:Math.round(player.y),ang:player.ang},p2:p2?{x:Math.round(p2.x),y:Math.round(p2.y),hp:Math.max(0,p2.hp),rapid:p2.rapid>0,shotgun:p2.shotgun>0}:null,zs:zs,bs:bs,pr:pr,pk:pk,bo:boss?[Math.round(boss.x),Math.round(boss.y),boss.r,boss.hp/boss.maxhp,boss.name]:null});
+}
+
+function showOverlay(h1,story,btn){
+ document.getElementById('overlay').style.display='flex';
+ document.getElementById('overlay').querySelector('h1').textContent=h1;
+ document.getElementById('story').textContent=story;
+ document.getElementById('startbtn').textContent=btn;
+}
+
+// ---------- hud ----------
+function updHud(){
+ const cm=net.open&&!net.isHost;
+ document.getElementById('wave').textContent=cm?(rem.w||0):wave;
+ document.getElementById('score').textContent=cm?(rem.sc||0):score;
+ const hp=cm?(rem.p2?rem.p2.hp:100):player.hp;
+ const f=document.getElementById('hpfill');f.style.width=Math.max(0,hp/player.maxhp*100)+'%';
  document.getElementById('ammo').textContent=reloading>0?'...':mag+'/'+MAG;
- document.getElementById('buff').textContent=(player.rapid>0?'RAPID FIRE ':'')+(player.shotgun>0?'SHOTGUN ':'');}
+ document.getElementById('buff').textContent=cm?'':((player.rapid>0?'RAPID FIRE ':'')+(player.shotgun>0?'SHOTGUN ':''));
+}
 
 function update(){
  if(!playing||paused)return;
  gameTime++;shake*=.9;
- // player
  let dx=0,dy=0;
  if(keys['w']||keys['arrowup'])dy--;if(keys['s']||keys['arrowdown'])dy++;
  if(keys['a']||keys['arrowleft'])dx--;if(keys['d']||keys['arrowright'])dx++;
  if(dx||dy){const l=Math.hypot(dx,dy);player.x+=dx/l*player.speed;player.y+=dy/l*player.speed;}
  if(touch.active){const tx=touch.x-player.x,ty=touch.y-player.y,td=Math.hypot(tx,ty);if(td>10){player.x+=tx/td*player.speed;player.y+=ty/td*player.speed;}}
  player.x=Math.max(player.r,Math.min(W-player.r,player.x));player.y=Math.max(player.r,Math.min(H-player.r,player.y));
- player.ang=Math.atan2(mouse.y-player.y,mouse.x-player.x);
  if(player.iframes>0)player.iframes--;if(player.rapid>0)player.rapid--;if(player.shotgun>0)player.shotgun--;
- if(touch.active){autoAim();if(fireCd<=0)shoot();}else if(mouse.down&&fireCd<=0)shoot();if(fireCd>0)fireCd--;
- if(reloading>0){reloading--;if(reloading<=0)mag=MAG;}
- // waves
+ const cm=net.open&&!net.isHost;
+ if(cm){
+  if(touch.active)aimNearestNet();else player.ang=Math.atan2(mouse.y-player.y,mouse.x-player.x);
+  if((mouse.down||touch.active)&&fireCd<=0){
+   if(mag>0){mag--;send({t:'sh',a:player.ang});sfx('shoot');fireCd=player.shotgun>0?5:10;}
+   else reload();
+  }
+  if(fireCd>0)fireCd--;
+  if(reloading>0){reloading--;if(reloading<=0)mag=MAG;}
+  if(rem.p2){if(rem.p2.rapid)player.rapid=1;if(rem.p2.shotgun)player.shotgun=1;}
+  if(gameTime%4===0)send({t:'p',x:Math.round(player.x),y:Math.round(player.y),ang:player.ang});
+ }else{
+  player.ang=Math.atan2(mouse.y-player.y,mouse.x-player.x);
+  if(mouse.down&&fireCd<=0)shoot();if(fireCd>0)fireCd--;
+  if(reloading>0){reloading--;if(reloading<=0)mag=MAG;}
+  hostSim();
+  if(net.isHost&&net.open&&gameTime%4===0)sendSnap();
+ }
+ for(let i=parts.length-1;i>=0;i--){const p=parts[i];p.x+=p.vx;p.y+=p.vy;p.vx*=.92;p.vy*=.92;p.life--;if(p.life<=0)parts.splice(i,1);}
+ updHud();
+}
+
+function nearestPl(x,y){let t=player,bd=Math.hypot(player.x-x,player.y-y);if(p2){const d=Math.hypot(p2.x-x,p2.y-y);if(d<bd){bd=d;t=p2;}}return t;}
+
+function hostSim(){
  if(!boss&&zombies.length===0&&spawnQueue.length===0){waveTimer++;if(waveTimer>140)nextWave();}
  for(let i=spawnQueue.length-1;i>=0;i--){spawnQueue[i].delay--;if(spawnQueue[i].delay<=0){spawnZombie(spawnQueue[i].t);spawnQueue.splice(i,1);}}
  // bullets
@@ -173,70 +289,99 @@ function update(){
     if(z.hp<=0){score+=z.score;boom(z.x,z.y,'#6a6',18,4);dropPickup(z.x,z.y);zombies.splice(j,1);sfx('hit');}
     break;}}
   if(hit)bullets.splice(i,1);}
- // boss ai
- if(boss){if(boss.hit>0)boss.hit--;const d=Math.hypot(player.x-boss.x,player.y-boss.y);boss.ang=Math.atan2(player.y-boss.y,player.x-boss.x);
-  if(d>boss.r+player.r+6){boss.x+=Math.cos(boss.ang)*boss.sp;boss.y+=Math.sin(boss.ang)*boss.sp;}
-  boss.cd--;if(boss.cd<=0&&d<560){boss.cd=Math.max(50,130-wave);const a=Math.atan2(player.y-boss.y,player.x-boss.x);
+ // boss
+ if(boss){if(boss.hit>0)boss.hit--;const t=nearestPl(boss.x,boss.y);const d=Math.hypot(t.x-boss.x,t.y-boss.y);boss.ang=Math.atan2(t.y-boss.y,t.x-boss.x);
+  if(d>boss.r+t.r+6){boss.x+=Math.cos(boss.ang)*boss.sp;boss.y+=Math.sin(boss.ang)*boss.sp;}
+  boss.cd--;if(boss.cd<=0&&d<560){boss.cd=Math.max(50,130-wave);const a=Math.atan2(t.y-boss.y,t.x-boss.x);
    for(let k=-1;k<=1;k++)projectiles.push({x:boss.x,y:boss.y,vx:Math.cos(a+k*.25)*5.5,vy:Math.sin(a+k*.25)*5.5,r:8,life:180});
    sfx('hit');}
   document.getElementById('bossfill').style.width=Math.max(0,boss.hp/boss.maxhp*100)+'%';
   const dd=Math.hypot(player.x-boss.x,player.y-boss.y);
-  if(dd<boss.r+player.r&&player.iframes<=0){hurt(boss.dmg);player.x+=(player.x-boss.x)/dd*22;player.y+=(player.y-boss.y)/dd*22;}}
+  if(dd<boss.r+player.r&&player.iframes<=0){hurt(boss.dmg);player.x+=(player.x-boss.x)/dd*22;player.y+=(player.y-boss.y)/dd*22;}
+  if(p2){const d2=Math.hypot(p2.x-boss.x,p2.y-boss.y);if(d2<boss.r+p2.r&&p2.iframes<=0){hurt2(boss.dmg);p2.x+=(p2.x-boss.x)/d2*22;p2.y+=(p2.y-boss.y)/d2*22;}}}
  // projectiles
  for(let i=projectiles.length-1;i>=0;i--){const p=projectiles[i];p.x+=p.vx;p.y+=p.vy;p.life--;
   if(p.life<=0||p.x<-30||p.x>W+30||p.y<-30||p.y>H+30){projectiles.splice(i,1);continue;}
-  if(Math.hypot(p.x-player.x,p.y-player.y)<p.r+player.r&&player.iframes<=0){hurt(14);projectiles.splice(i,1);boom(p.x,p.y,'#f84',8,3);}}
+  if(Math.hypot(p.x-player.x,p.y-player.y)<p.r+player.r&&player.iframes<=0){hurt(14);projectiles.splice(i,1);boom(p.x,p.y,'#f84',8,3);continue;}
+  if(p2&&Math.hypot(p.x-p2.x,p.y-p2.y)<p.r+p2.r&&p2.iframes<=0){hurt2(14);projectiles.splice(i,1);boom(p.x,p.y,'#f84',8,3);}}
  // zombies
  for(let i=zombies.length-1;i>=0;i--){const z=zombies[i];if(z.hit>0)z.hit--;
-  const a=Math.atan2(player.y-z.y,player.x-z.x);z.x+=Math.cos(a)*z.sp;z.y+=Math.sin(a)*z.sp;
-  if(Math.hypot(z.x-player.x,z.y-player.y)<z.r+player.r&&player.iframes<=0){hurt(z.dmg);zombies.splice(i,1);boom(player.x,player.y,'#a55',10,4);}}
+  const t=nearestPl(z.x,z.y);const a=Math.atan2(t.y-z.y,t.x-z.x);z.x+=Math.cos(a)*z.sp;z.y+=Math.sin(a)*z.sp;
+  const d=Math.hypot(z.x-player.x,z.y-player.y);
+  if(d<z.r+player.r&&player.iframes<=0){hurt(z.dmg);zombies.splice(i,1);boom(player.x,player.y,'#a55',10,4);continue;}
+  if(p2&&Math.hypot(z.x-p2.x,z.y-p2.y)<z.r+p2.r&&p2.iframes<=0){hurt2(z.dmg);zombies.splice(i,1);boom(p2.x,p2.y,'#a55',10,4);}}
  // pickups
  for(let i=pickups.length-1;i>=0;i--){const p=pickups[i];p.t--;
   if(p.t<=0){pickups.splice(i,1);continue;}
-  if(Math.hypot(p.x-player.x,p.y-player.y)<24){sfx('pick');
-   if(p.kind==='hp'){player.hp=Math.min(player.maxhp,player.hp+35);}
-   else if(p.kind==='rapid'){player.rapid=480;}
-   else{player.shotgun=420;}
-   boom(p.x,p.y,'#ff5',12,3);pickups.splice(i,1);}}
- // parts
- for(let i=parts.length-1;i>=0;i--){const p=parts[i];p.x+=p.vx;p.y+=p.vy;p.vx*=.92;p.vy*=.92;p.life--;if(p.life<=0)parts.splice(i,1);}
- updHud();
+  let taken=false;
+  if(Math.hypot(p.x-player.x,p.y-player.y)<24){sfx('pick');applyPickup(player,p.kind);taken=true;}
+  else if(p2&&Math.hypot(p.x-p2.x,p.y-p2.y)<24){sfx('pick');applyPickup(p2,p.kind);taken=true;}
+  if(taken){boom(p.x,p.y,'#ff5',12,3);pickups.splice(i,1);}}
 }
 
-function hurt(d){player.hp-=d;player.iframes=36;shake=10;sfx('hurt');
- if(player.hp<=0){playing=false;gameOver();}}
+function applyPickup(pl,kind){
+ if(kind==='hp')pl.hp=Math.min(pl.maxhp,pl.hp+35);
+ else if(kind==='rapid')pl.rapid=480;
+ else pl.shotgun=420;
+}
+
+function hurt(d){player.hp-=d;player.iframes=36;shake=10;sfx('hurt');if(player.hp<=0){endGame();}}
+function hurt2(d){if(!p2)return;p2.hp-=d;p2.iframes=36;sfx('hurt');if(p2.hp<=0){endGame();}}
+function endGame(){
+ if(!playing)return;playing=false;
+ if(net.isHost&&net.open)send({t:'go',w:wave,sc:score});
+ gameOver();
+}
 
 // ---------- draw ----------
 function draw(){
  ctx.setTransform(1,0,0,1,0,0);
  ctx.fillStyle='#0a0a0f';ctx.fillRect(0,0,W,H);
- // ground grid
  ctx.strokeStyle='rgba(40,70,40,.25)';ctx.lineWidth=1;
  for(let x=((-gameTime*.4)%60+60)%60;x<W;x+=60){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
  for(let y=((-gameTime*.4)%60+60)%60;y<H;y+=60){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
  const sx=(Math.random()-.5)*shake,sy=(Math.random()-.5)*shake;ctx.translate(sx,sy);
- // pickups
+ const cm=net.open&&!net.isHost;
+ if(cm)drawNet();else drawLocal();
+ ctx.setTransform(1,0,0,1,0,0);
+ if(paused&&playing){ctx.fillStyle='rgba(0,0,0,.6)';ctx.fillRect(0,0,W,H);ctx.fillStyle='#cfc';ctx.font='40px monospace';ctx.textAlign='center';ctx.fillText('PAUSED',W/2,H/2);}
+}
+
+function drawLocal(){
  for(const p of pickups){const c=p.kind==='hp'?'#f55':p.kind==='rapid'?'#ff5':'#5af';ctx.globalAlpha=p.t<90?(p.t/90):1;
   ctx.fillStyle=c;ctx.beginPath();ctx.arc(p.x,p.y,10,0,7);ctx.fill();ctx.fillStyle='#050';ctx.font='bold 11px monospace';ctx.textAlign='center';ctx.fillText(p.kind==='hp'?'+':p.kind==='rapid'?'R':'S',p.x,p.y+4);ctx.globalAlpha=1;}
- // parts
  for(const p of parts){ctx.globalAlpha=Math.max(0,p.life/40);ctx.fillStyle=p.color;ctx.fillRect(p.x-2,p.y-2,4,4);}ctx.globalAlpha=1;
- // zombies
  for(const z of zombies){ctx.fillStyle=z.hit>0?'#fff':z.color;ctx.beginPath();ctx.arc(z.x,z.y,z.r,0,7);ctx.fill();
   ctx.fillStyle='#111';ctx.beginPath();ctx.arc(z.x-4,z.y-4,2.5,0,7);ctx.arc(z.x+4,z.y-4,2.5,0,7);ctx.fill();}
- // boss
  if(boss){ctx.fillStyle=boss.hit>0?'#fff':'#b33';ctx.beginPath();ctx.arc(boss.x,boss.y,boss.r,0,7);ctx.fill();
   ctx.fillStyle='#111';ctx.beginPath();ctx.arc(boss.x-12,boss.y-10,6,0,7);ctx.arc(boss.x+12,boss.y-10,6,0,7);ctx.fill();
   ctx.strokeStyle='#f66';ctx.lineWidth=3;ctx.beginPath();ctx.arc(boss.x,boss.y,boss.r+8,0,7);ctx.stroke();}
- // projectiles
  for(const p of projectiles){ctx.fillStyle='#f84';ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,7);ctx.fill();}
- // player
  if(player){ctx.fillStyle=player.iframes>0&&(gameTime%6<3)?'#fff':'#7df';
   ctx.beginPath();ctx.arc(player.x,player.y,player.r,0,7);ctx.fill();
   ctx.strokeStyle='#7df';ctx.lineWidth=4;ctx.beginPath();ctx.moveTo(player.x,player.y);ctx.lineTo(player.x+Math.cos(player.ang)*24,player.y+Math.sin(player.ang)*24);ctx.stroke();}
- // bullets
+ if(p2){ctx.fillStyle=p2.iframes>0&&(gameTime%6<3)?'#fff':'#f7a';
+  ctx.beginPath();ctx.arc(p2.x,p2.y,p2.r,0,7);ctx.fill();
+  ctx.strokeStyle='#f7a';ctx.lineWidth=4;ctx.beginPath();ctx.moveTo(p2.x,p2.y);ctx.lineTo(p2.x+Math.cos(p2.ang)*24,p2.y+Math.sin(p2.ang)*24);ctx.stroke();}
  for(const b of bullets){ctx.fillStyle='#ff5';ctx.beginPath();ctx.arc(b.x,b.y,b.r,0,7);ctx.fill();}
- ctx.setTransform(1,0,0,1,0,0);
- if(paused&&playing){ctx.fillStyle='rgba(0,0,0,.6)';ctx.fillRect(0,0,W,H);ctx.fillStyle='#cfc';ctx.font='40px monospace';ctx.textAlign='center';ctx.fillText('PAUSED',W/2,H/2);}
+}
+
+function drawNet(){
+ const ZC=['#5a5','#8f8','#4a4'];
+ for(const p of rem.pk||[]){const c=p[2]===0?'#f55':p[2]===1?'#ff5':'#5af';ctx.fillStyle=c;ctx.beginPath();ctx.arc(p[0],p[1],10,0,7);ctx.fill();}
+ for(const p of parts){ctx.globalAlpha=Math.max(0,p.life/40);ctx.fillStyle=p.color;ctx.fillRect(p.x-2,p.y-2,4,4);}ctx.globalAlpha=1;
+ for(const z of rem.zs||[]){ctx.fillStyle=z[3]?'#fff':ZC[z[4]||0];ctx.beginPath();ctx.arc(z[0],z[1],z[2],0,7);ctx.fill();
+  ctx.fillStyle='#111';ctx.beginPath();ctx.arc(z[0]-4,z[1]-4,2.5,0,7);ctx.arc(z[0]+4,z[1]-4,2.5,0,7);ctx.fill();}
+ if(rem.bo){ctx.fillStyle='#b33';ctx.beginPath();ctx.arc(rem.bo[0],rem.bo[1],rem.bo[2],0,7);ctx.fill();
+  ctx.strokeStyle='#f66';ctx.lineWidth=3;ctx.beginPath();ctx.arc(rem.bo[0],rem.bo[1],rem.bo[2]+8,0,7);ctx.stroke();
+  document.getElementById('bossname').textContent=rem.bo[4];document.getElementById('bossbar').style.display='block';document.getElementById('bossfill').style.width=Math.max(0,rem.bo[3]*100)+'%';}
+ else document.getElementById('bossbar').style.display='none';
+ for(const p of rem.pr||[]){ctx.fillStyle='#f84';ctx.beginPath();ctx.arc(p[0],p[1],8,0,7);ctx.fill();}
+ for(const b of rem.bs||[]){ctx.fillStyle='#ff5';ctx.beginPath();ctx.arc(b[0],b[1],4,0,7);ctx.fill();}
+ if(rem.me){ctx.fillStyle='#7df';ctx.beginPath();ctx.arc(rem.me.x,rem.me.y,14,0,7);ctx.fill();
+  ctx.strokeStyle='#7df';ctx.lineWidth=4;ctx.beginPath();ctx.moveTo(rem.me.x,rem.me.y);ctx.lineTo(rem.me.x+Math.cos(rem.me.ang)*24,rem.me.y+Math.sin(rem.me.ang)*24);ctx.stroke();}
+ if(player){ctx.fillStyle='#f7a';ctx.beginPath();ctx.arc(player.x,player.y,player.r,0,7);ctx.fill();
+  ctx.strokeStyle='#f7a';ctx.lineWidth=4;ctx.beginPath();ctx.moveTo(player.x,player.y);ctx.lineTo(player.x+Math.cos(player.ang)*24,player.y+Math.sin(player.ang)*24);ctx.stroke();}
 }
 
 function loop(){try{update();draw();}catch(e){}requestAnimationFrame(loop);}
@@ -244,15 +389,18 @@ reset();
 requestAnimationFrame(loop);
 
 function gameOver(){
- document.getElementById('overlay').style.display='flex';
- document.getElementById('overlay').querySelector('h1').textContent='YOU DIED';
- document.getElementById('story').textContent='You survived '+wave+' wave'+(wave===1?'':'s')+' with a score of '+score+'. The horde always comes back.';
- document.getElementById('startbtn').textContent='PLAY AGAIN';
+ showOverlay('YOU DIED','You survived '+wave+' wave'+(wave===1?'':'s')+' with a score of '+score+'. The horde always comes back.','PLAY AGAIN');
 }
 
 document.getElementById('startbtn').addEventListener('click',()=>{
+ if(net.open&&!net.isHost){nstatus('wait for the host to start the game');return;}
  reset();document.getElementById('overlay').style.display='none';playing=true;nextWave();
+ if(net.isHost&&net.open)send({t:'start'});
 });
+document.getElementById('hostbtn').addEventListener('click',hostGame);
+document.getElementById('joinbtn').addEventListener('click',()=>{document.getElementById('joinrow').style.display='flex';document.getElementById('codein').focus();});
+document.getElementById('joingo').addEventListener('click',()=>joinGame(document.getElementById('codein').value));
+document.getElementById('codein').addEventListener('keydown',e=>{if(e.key==='Enter')joinGame(e.target.value);});
 </script>
 </body>
 </html>
