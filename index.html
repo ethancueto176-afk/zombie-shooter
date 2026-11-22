@@ -239,7 +239,8 @@ function draw(){
  if(paused&&playing){ctx.fillStyle='rgba(0,0,0,.6)';ctx.fillRect(0,0,W,H);ctx.fillStyle='#cfc';ctx.font='40px monospace';ctx.textAlign='center';ctx.fillText('PAUSED',W/2,H/2);}
 }
 
-function loop(){update();draw();requestAnimationFrame(loop);}
+function loop(){try{update();draw();}catch(e){}requestAnimationFrame(loop);}
+reset();
 requestAnimationFrame(loop);
 
 function gameOver(){
