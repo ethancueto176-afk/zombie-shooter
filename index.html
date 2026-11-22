@@ -233,6 +233,7 @@ function pushStart(quiet){
  if(!quiet){reset();document.getElementById('overlay').style.display='none';playing=true;nextWave();}
 }
 function hostGame(){
+ if(bannedMe){nstatus('you are banned');return;}
  if(!db){nstatus('multiplayer needs internet, reload the page');return;}
  net.isHost=true;net.dead=false;net.code=makeCode();net.open=false;net.guestUid='';net.lastIn=0;
  nstatus('making room '+net.code+'...');
@@ -246,6 +247,7 @@ function hostGame(){
  }).catch(e=>nstatus('room error, try again'));
 }
 function joinGame(code){
+ if(bannedMe){nstatus('you are banned');return;}
  if(!db){nstatus('multiplayer needs internet, reload the page');return;}
  code=(code||'').trim().toUpperCase();
  if(code.length<4){nstatus('type the 4-letter room code first');return;}
@@ -362,7 +364,8 @@ function addOwner(){
 function renderBans(){
  if(!isOwner)return;
  const el=document.getElementById('banlist');
- if(!el.dataset.boot){el.dataset.boot=1;el.innerHTML='<div id="ownl"></div><div id="banl"></div>';}
+ if(!el.dataset.boot){el.dataset.boot=1;el.innerHTML='<div id="ownl"></div><div id="banl"></div>';
+ }
  const ownl=document.getElementById('ownl'),banl=document.getElementById('banl');
  db.ref('owners').off('value');
  db.ref('owners').on('value',snap=>{
@@ -390,12 +393,16 @@ function renderBans(){
   }));
  });
 }
+let bannedMe=false;
+function showBanned(){
+ bannedMe=true;
+ showOverlay('YOU WERE BANNED','The owner banned your player id. Your id is '+MYTAG+'. You cannot play until the owner unbans you.','BANNED');
+}
 function watchBanMe(){
  db.ref('banned/'+MYUID).on('value',snap=>{
   if(snap.val()){
    playing=false;paused=false;
-   leaveRoom();closeOwner();
-   showOverlay('YOU WERE BANNED','The owner banned your player id. Your id is '+MYTAG+'. A cleared browser or a new phone gets a fresh id.','PLAY SOLO');
+   leaveRoom();closeOwner();showBanned();
   }
  });
 }
@@ -609,6 +616,7 @@ function gameOver(){
 }
 
 document.getElementById('startbtn').addEventListener('click',()=>{
+ if(bannedMe){showBanned();return;}
  if(net.open&&!net.isHost){nstatus('wait for the host to start the game');return;}
  if(net.isHost&&net.open){pushStart(false);return;}
  reset();document.getElementById('overlay').style.display='none';playing=true;nextWave();
