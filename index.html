@@ -76,8 +76,6 @@
 </div>
 <button id="weapbtn">PISTOL</button>
 <button id="banbtn">BAN PLAYER</button>
-<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
 <script>
 "use strict";
 const cv=document.getElementById('game'),ctx=cv.getContext('2d');
@@ -183,94 +181,90 @@ function nextWave(){
  waveTimer=0;
 }
 
-// ---------- firebase multiplayer ----------
-const FB_CONF={apiKey:"AIzaSyDJzFxmyUs4WuLJCWLGHwsq1VNSXTTvT1Q",authDomain:"zombie-game-5d05f.firebaseapp.com",projectId:"zombie-game-5d05f",storageBucket:"zombie-game-5d05f.firebasestorage.app",messagingSenderId:"411130370920",appId:"1:411130370920:web:9c0bd21a23e8d5bdf194dd"};
-let db=null;
-try{if(typeof firebase!=='undefined'){firebase.initializeApp(FB_CONF);db=firebase.database();}}catch(e){console.log('firebase',e);}
+// ---------- multiplayer (cloudflare relay) ----------
 let MYUID=localStorage.getItem('zob_uid');
 if(!MYUID){MYUID='p'+Math.random().toString(36).slice(2,9);localStorage.setItem('zob_uid',MYUID);}
 const MYTAG='#'+MYUID.slice(1,7).toUpperCase();
-let net={room:null,open:false,isHost:false,code:'',lastIn:0,lastOther:0,guestUid:'',hostUid:'',dead:false};
+const SRV='https://zombie-outbreak.ethancueto176-ace.workers.dev';let net={room:null,open:false,isHost:false,code:'',lastIn:0,lastOther:0,guestUid:'',hostUid:'',dead:false,ws:null};
 
 function nstatus(t){const e=document.getElementById('netstatus');if(e)e.textContent=t;}
 function makeCode(){const l='ABCDEFGHJKMNPQRSTUVWXYZ23456789';let c='';for(let i=0;i<4;i++)c+=l[Math.floor(Math.random()*l.length)];return c;}
-function roomPath(c){return 'rooms/'+c;}
-function send(o){
- if(!db||!net.room)return;
- o.u=MYUID;
- try{db.ref(roomPath(net.code)+(net.isHost?'evh':'evg')).push(o);}catch(e){}
-}
-function watchEvents(){
- const ref=db.ref(roomPath(net.code)+(net.isHost?'evg':'evh')).limitToLast(20);
- ref.on('child_added',snap=>{
-  const k=snap.key;if(net.lastIn&&k<=net.lastIn)return;
-  net.lastIn=k;net.lastOther=Date.now();
-  const d=snap.val();if(d)onNet(d);
+function roomPath(c){return c;}
+async function api(path,opts){const r=await fetch(SRV+'/api/'+path,opts);return r.json().catch(()=>({}));}
+function wsSend(o){try{if(net.ws&&net.ws.readyState===1)net.ws.send(JSON.stringify(o));}catch(e){}}
+function send(o){if(!net.ws)return;o.u=MYUID;wsSend({t:'ev',d:o});}
+function openRoom(code,role){
+ return new Promise((res,rej)=>{
+  let done=false;const WSURL='wss://zombie-outbreak.ethancueto176-ace.workers.dev/ws';
+  const ws=new WebSocket(WSURL+'?room='+encodeURIComponent(code)+'&uid='+encodeURIComponent(MYUID));
+  net.ws=ws;
+  const fail=r=>{if(done)return;done=true;try{ws.onclose=null;}catch(e){}try{ws.close();}catch(e){}net.ws=null;rej(r);};
+  ws.onopen=()=>{ws.send(JSON.stringify({t:'join',role:role,uid:MYUID}));};
+  ws.onmessage=ev=>{
+   let m;try{m=JSON.parse(ev.data);}catch(e){return;}
+   if(m.t==='joined'){if(!done){done=true;net.open=true;res(m);}}
+   else if(m.t==='noroom'){fail('noroom');}
+   else if(m.t==='full'){fail('full');}
+   else if(m.t==='banned'){fail('banned');}
+   else if(m.t==='meta'){onMeta(m.m);}
+   else if(m.t==='ev'){net.lastIn++;net.lastOther=Date.now();onNet(m.d);}
+   else if(m.t==='snap'){net.lastOther=Date.now();try{rem=JSON.parse(m.j);}catch(e){}}
+  };
+  ws.onclose=()=>{if(!done)fail('closed');net.ws=null;};
+  ws.onerror=()=>{if(!done)fail('error');};
+  setTimeout(()=>{if(!done)fail('timeout');},8000);
  });
 }
-function watchMeta(){
- db.ref(roomPath(net.code)+'/meta').on('value',snap=>{
-  const m=snap.val()||{};
-  if(net.isHost){
-   if(m.g&&m.g!==MYUID&&net.guestUid!==m.g){net.guestUid=m.g;addP2();nstatus('friend joined! ('+('#'+m.g.slice(1,7).toUpperCase())+')');if(playing)pushStart(true);}
-   if(m.g&&Date.now()-(m.gp||0)>12000&&net.open&&playing){nstatus('friend lost connection...');}
-  }else{
-   net.hostUid=m.h||net.hostUid;
-   if(m.st==='p'&&!playing&&!net.dead){
-    net.open=true;reset();document.getElementById('overlay').style.display='none';playing=true;banner('CO-OP START');
-   }
-   if(net.open&&Date.now()-(m.hp||0)>12000){
-    if(playing){playing=false;showOverlay('CONNECTION LOST','The host left the game.','PLAY SOLO');}
-    else nstatus('host went away, try again');
-    leaveRoom();
-   }
+function onMeta(m){
+ if(!m)m={};
+ if(net.isHost){
+  if(m.g&&m.g!==MYUID&&net.guestUid!==m.g){net.guestUid=m.g;addP2();nstatus('friend joined! ('+('#'+m.g.slice(1,7).toUpperCase())+')');if(playing)pushStart(true);}
+  if(m.g&&Date.now()-(m.gp||0)>12000&&net.open&&playing){nstatus('friend lost connection...');}
+ }else{
+  net.hostUid=m.h||net.hostUid;
+  if(m.st==='p'&&!playing&&!net.dead){
+   net.open=true;reset();document.getElementById('overlay').style.display='none';playing=true;banner('CO-OP START');
   }
- });
+  if(net.open&&Date.now()-(m.hp||0)>12000){
+   if(playing){playing=false;showOverlay('CONNECTION LOST','The host left the game.','PLAY SOLO');}
+   else nstatus('host went away, try again');
+   leaveRoom();
+  }
+ }
 }
 function pushStart(quiet){
- db.ref(roomPath(net.code)+'/meta/st').set('p');
- send({t:'start'});
+ wsSend({t:'start'});
  if(!quiet){reset();document.getElementById('overlay').style.display='none';playing=true;nextWave();}
 }
-function hostGame(){
+async function hostGame(){
  if(bannedMe){nstatus('you are banned');return;}
- if(!db){nstatus('multiplayer needs internet, reload the page');return;}
  net.isHost=true;net.dead=false;net.code=makeCode();net.open=false;net.guestUid='';net.lastIn=0;
  nstatus('making room '+net.code+'...');
- net.room=db.ref(roomPath(net.code));
- net.room.remove().then(()=>{
-  net.room.child('meta').set({h:MYUID,st:'w',hp:firebase.database.ServerValue.TIMESTAMP});
+ try{
+  await openRoom(net.code,'host');
   net.lastOther=Date.now();
   nstatus('room code: '+net.code+'. tell your friend to join with it, then hit SOLO GAME to start');
-  watchEvents();watchMeta();
-  db.ref(roomPath(net.code)+'/gin').on('value',snap=>{const v=snap.val();if(!v)return;try{const g=JSON.parse(v);if(p2){p2.x=g.x;p2.y=g.y;p2.ang=g.a;}}catch(e){}});
- }).catch(e=>nstatus('room error, try again'));
+ }catch(e){net.isHost=false;net.open=false;nstatus(e==='banned'?'you are banned from this game':'room error, try again');}
 }
-function joinGame(code){
+async function joinGame(code){
  if(bannedMe){nstatus('you are banned');return;}
- if(!db){nstatus('multiplayer needs internet, reload the page');return;}
  code=(code||'').trim().toUpperCase();
  if(code.length<4){nstatus('type the 4-letter room code first');return;}
  net.isHost=false;net.dead=false;nstatus('joining '+code+'...');
- db.ref(roomPath(code)+'/meta').once('value').then(snap=>{
-  const m=snap.val();
-  if(!m||!m.h){nstatus('no room with that code');return;}
-  if(m.g&&m.g!==MYUID){nstatus('room is full');return;}
-  db.ref('banned/'+MYUID).once('value').then(bs=>{
-   if(bs.val()){nstatus('you are banned from this game');return;}
-   net.code=code;net.room=db.ref(roomPath(code));net.open=false;net.lastIn=0;
-   net.room.child('meta/g').set(MYUID);
-   net.room.child('meta/gp').set(firebase.database.ServerValue.TIMESTAMP);
-   send({t:'hello'});
-   watchEvents();watchMeta();watchSnap();
-   nstatus('connected! waiting for the host to start...');
-  });
- }).catch(e=>nstatus('could not join, try again'));
+ try{
+  const b=await api('banned/'+MYUID);
+  if(b.banned){nstatus('you are banned from this game');return;}
+  await openRoom(code,'guest');
+  net.code=code;net.lastIn=0;
+  send({t:'hello'});
+  nstatus('connected! waiting for the host to start...');
+ }catch(e){
+  nstatus(e==='full'?'room is full':(e==='noroom'?'no room with that code':(e==='banned'?'you are banned from this game':'could not join, try again')));
+ }
 }
 function leaveRoom(){
- if(!net.room)return;
- try{net.room.child(net.isHost?'evh':'evg').off();net.room.child('meta').off();net.room.child(net.isHost?'gin':'snap').off();}catch(e){}
- net.room=null;net.open=false;
+ try{if(net.ws){net.ws.onclose=null;net.ws.close();}}catch(e){}
+ net.ws=null;net.open=false;
 }
 function addP2(){p2={x:player.x+40,y:player.y,r:14,hp:100,maxhp:100,iframes:60,rapid:0,shotgun:0,ang:0};}
 
@@ -279,6 +273,7 @@ function onNet(d){
  if(net.isHost){
   if(d.t==='hello'&&!net.guestUid){/* wait for meta */}
   else if(d.t==='sh'&&p2){const w=WEAPONS[Math.min(d.w||0,WEAPONS.length-1)];spawnShots(p2,d.a,w);sfx('shoot');}
+  else if(d.t==='gin'&&p2){try{const g=JSON.parse(d.j);p2.x=g.x;p2.y=g.y;p2.ang=g.a;}catch(e){}}
  }else{
   if(d.t==='start'){/* handled by meta st */}
   else if(d.t==='msg'){banner(d.x);}
@@ -292,14 +287,7 @@ function sendSnap(){
  const bs=[];for(const b of bullets)bs.push([Math.round(b.x),Math.round(b.y),b.r,b.c===undefined?0:ZC.indexOf(b.c)<0?0:ZC.indexOf(b.c)]);
  const pr=[];for(const p of projectiles)pr.push([Math.round(p.x),Math.round(p.y)]);
  const pk=[];for(const p of pickups)pk.push([Math.round(p.x),Math.round(p.y),p.kind==='hp'?0:p.kind==='rapid'?1:2]);
- try{net.room.child('snap').set(JSON.stringify({w:wave,sc:score,me:{x:Math.round(player.x),y:Math.round(player.y),ang:Math.round(player.ang*100)/100},p2:p2?{x:Math.round(p2.x),y:Math.round(p2.y),hp:Math.max(0,p2.hp),rapid:p2.rapid>0?1:0,shotgun:p2.shotgun>0?1:0}:null,zs:zs,bs:bs,pr:pr,pk:pk,bo:boss?[Math.round(boss.x),Math.round(boss.y),boss.r,Math.round(boss.hp/boss.maxhp*100)/100,boss.name]:null}));}catch(e){}
-}
-function watchSnap(){
- db.ref(roomPath(net.code)+'/snap').on('value',snap=>{
-  const v=snap.val();if(!v)return;
-  net.lastOther=Date.now();
-  try{rem=JSON.parse(v);}catch(e){}
- });
+ try{wsSend({t:'snap',j:JSON.stringify({w:wave,sc:score,me:{x:Math.round(player.x),y:Math.round(player.y),ang:Math.round(player.ang*100)/100},p2:p2?{x:Math.round(p2.x),y:Math.round(p2.y),hp:Math.max(0,p2.hp),rapid:p2.rapid>0?1:0,shotgun:p2.shotgun>0?1:0}:null,zs:zs,bs:bs,pr:pr,pk:pk,bo:boss?[Math.round(boss.x),Math.round(boss.y),boss.r,Math.round(boss.hp/boss.maxhp*100)/100,boss.name]:null})});}catch(e){}
 }
 
 // ---------- owner / bans / secret weapons ----------
@@ -314,10 +302,10 @@ function openOwner(){
  tools.style.display=isOwner?'block':'none';
  document.getElementById('pinrow').style.display=isOwner?'none':'flex';
  if(!isOwner){
-  db.ref('owners').once('value').then(snap=>{
-   const v=snap.val();
+  api('owners').then(j=>{
+   const v=j.owners||{};
    document.getElementById('pinmsg').textContent=(v&&Object.keys(v).length)?'type the owner pin':'no owner yet: type a pin to claim it';
-  });
+  }).catch(()=>{});
  }else renderBans();
 }
 function closeOwner(){
@@ -328,11 +316,11 @@ function tryPin(){
  const pin=document.getElementById('pinin').value;
  if(!pin){document.getElementById('pinmsg').textContent='type a pin first';return;}
  const h=ph(pin);
- db.ref('owners').once('value').then(snap=>{
-  const v=snap.val()||{};
+ api('owners').then(async j=>{
+  const v=j.owners||{};
   const n=Object.keys(v).length;
   if(n===0||v[h]){
-   if(n===0&&!v[h])db.ref('owners/'+h).set(1);
+   if(n===0&&!v[h])await api('owner/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({h:h})});
    isOwner=true;localStorage.setItem('zob_owner','1');
    document.getElementById('pinmsg').textContent=(n===0)?'you claimed owner!':'welcome back, owner';
    setTimeout(()=>{openOwnerRefresh();},400);
@@ -357,54 +345,53 @@ function toggleSw(){
 function addOwner(){
  const pin=document.getElementById('addin').value;
  if(!pin)return;
- db.ref('owners/'+ph(pin)).set(1);
+ api('owner/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({h:ph(pin)})});
  document.getElementById('addin').value='';
  document.getElementById('pinmsg').textContent='owner added';
 }
-function renderBans(){
+async function renderBans(){
  if(!isOwner)return;
  const el=document.getElementById('banlist');
- if(!el.dataset.boot){el.dataset.boot=1;el.innerHTML='<div id="ownl"></div><div id="banl"></div>';
- }
+ if(!el.dataset.boot){el.dataset.boot=1;el.innerHTML='<div id="ownl"></div><div id="banl"></div>';}
  const ownl=document.getElementById('ownl'),banl=document.getElementById('banl');
- db.ref('owners').off('value');
- db.ref('owners').on('value',snap=>{
-  const v=snap.val()||{};const ks=Object.keys(v);
-  let h='OWNERS ('+ks.length+'):'+(ks.length?'':' none');
-  for(const k of ks)h+='<br>pin '+k.slice(1,5)+' <button data-unown="'+k+'">REMOVE</button>';
-  ownl.innerHTML=h;
-  ownl.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
-   db.ref('owners/'+b.dataset.unown).remove();
-   document.getElementById('pinmsg').textContent='owner removed';
-  }));
- });
- db.ref('banned').off('value');
- db.ref('banned').on('value',snap=>{
-  const v=snap.val()||{};let html='<br>BANNED IDS:';
-  const ks=Object.keys(v);
-  if(!ks.length)html+=' none';
-  else for(const k of ks)html+='<br>#'+k.slice(1,7).toUpperCase()+' <button data-un="'+k+'">UNBAN</button>';
-  if(net.isHost&&net.guestUid)html+='<br>PLAYER HERE: '+('#'+net.guestUid.slice(1,7).toUpperCase())+' <button data-ban="'+net.guestUid+'">BAN</button>';
-  if(!net.isHost&&net.hostUid)html+='<br>PLAYER HERE: '+('#'+net.hostUid.slice(1,7).toUpperCase())+' <button data-ban="'+net.hostUid+'">BAN</button>';
-  banl.innerHTML=html;
-  banl.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
-   if(b.dataset.ban){db.ref('banned/'+b.dataset.ban).set(1);document.getElementById('pinmsg').textContent='banned '+(('#'+b.dataset.ban.slice(1,7).toUpperCase()));}
-   else if(b.dataset.un){db.ref('banned/'+b.dataset.un).remove();document.getElementById('pinmsg').textContent='unbanned '+(('#'+b.dataset.un.slice(1,7).toUpperCase()));}
-  }));
- });
+ const oj=await api('owners').catch(()=>({})),bj=await api('bans').catch(()=>({}));
+ const ov=oj.owners||{},bv=bj.bans||{};
+ const ks=Object.keys(ov);
+ let h='OWNERS ('+ks.length+'):'+(ks.length?'':' none');
+ for(const k of ks)h+='<br>pin '+k.slice(1,5)+' <button data-unown="'+k+'">REMOVE</button>';
+ ownl.innerHTML=h;
+ ownl.querySelectorAll('button').forEach(b=>b.addEventListener('click',async()=>{
+  await api('owner/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({h:b.dataset.unown})});
+  document.getElementById('pinmsg').textContent='owner removed';renderBans();
+ }));
+ let html='<br>BANNED IDS:';
+ const bks=Object.keys(bv);
+ if(!bks.length)html+=' none';
+ else for(const k of bks)html+='<br>#'+k.slice(1,7).toUpperCase()+' <button data-un="'+k+'">UNBAN</button>';
+ if(net.isHost&&net.guestUid)html+='<br>PLAYER HERE: '+('#'+net.guestUid.slice(1,7).toUpperCase())+' <button data-ban="'+net.guestUid+'">BAN</button>';
+ if(!net.isHost&&net.hostUid)html+='<br>PLAYER HERE: '+('#'+net.hostUid.slice(1,7).toUpperCase())+' <button data-ban="'+net.hostUid+'">BAN</button>';
+ banl.innerHTML=html;
+ banl.querySelectorAll('button').forEach(b=>b.addEventListener('click',async()=>{
+  if(b.dataset.ban){await api('ban/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:b.dataset.ban})});document.getElementById('pinmsg').textContent='banned '+('#'+b.dataset.ban.slice(1,7).toUpperCase());renderBans();}
+  else if(b.dataset.un){await api('ban/clear',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:b.dataset.un})});document.getElementById('pinmsg').textContent='unbanned '+('#'+b.dataset.un.slice(1,7).toUpperCase());renderBans();}
+ }));
 }
 let bannedMe=false;
 function showBanned(){
  bannedMe=true;
  showOverlay('YOU WERE BANNED','The owner banned your player id. Your id is '+MYTAG+'. You cannot play until the owner unbans you.','BANNED');
 }
+let banPoll=null;
 function watchBanMe(){
- db.ref('banned/'+MYUID).on('value',snap=>{
-  if(snap.val()){
-   playing=false;paused=false;
-   leaveRoom();closeOwner();showBanned();
-  }
- });
+ if(banPoll)return;
+ banPoll=setInterval(()=>{
+  api('banned/'+MYUID).then(j=>{
+   if(j.banned&&!bannedMe){
+    playing=false;paused=false;
+    leaveRoom();closeOwner();showBanned();
+   }
+  }).catch(()=>{});
+ },5000);
 }
 
 // ---------- weapons ----------
@@ -464,7 +451,7 @@ function updHud(){
 function update(){
  if(!playing||paused)return;
  gameTime++;shake*=.9;
- if(net.room&&gameTime%90===0){try{net.room.child('meta/'+(net.isHost?'hp':'gp')).set(firebase.database.ServerValue.TIMESTAMP);}catch(e){}}
+ if(gameTime%240===0)wsSend({t:'hb'});
  if(gameTime%30===0){const wb=document.getElementById('weapbtn');if(wb)wb.style.display=(swOn()&&playing)?'block':'none';const bb=document.getElementById('banbtn');if(bb)bb.style.display=(isOwner&&net.open&&playing)?'block':'none';}
  let dx=0,dy=0;
  if(keys['w']||keys['arrowup'])dy--;if(keys['s']||keys['arrowdown'])dy++;
@@ -483,7 +470,7 @@ function update(){
   if(fireCd>0)fireCd--;
   if(reloading>0){reloading--;if(reloading<=0)mag=magSize;}
   if(rem.p2){if(rem.p2.rapid)player.rapid=1;if(rem.p2.shotgun)player.shotgun=1;}
-  if(gameTime%4===0&&net.room){try{net.room.child('gin').set(JSON.stringify({x:Math.round(player.x),y:Math.round(player.y),a:player.ang}));}catch(e){}}
+  if(gameTime%4===0&&net.open&&!net.isHost)wsSend({t:'gin',j:JSON.stringify({x:Math.round(player.x),y:Math.round(player.y),a:player.ang})});
  }else{
   if(touch.active){autoAim();if(fireCd<=0)shoot();}
   else{player.ang=Math.atan2(mouse.y-player.y,mouse.x-player.x);if(mouse.down&&fireCd<=0)shoot();}
